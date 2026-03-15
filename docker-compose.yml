@@ -1,2 +1,94 @@
-version: "3.8"
-services: {}
+# Predictive Analytics App — Docker Compose
+# Orchestrates: Python ML API · React frontend · PostgreSQL
+#
+# Usage:
+#   docker-compose up --build          # Start all services
+#   docker-compose up backend          # Start ML API only
+#   docker-compose down -v             # Stop and remove volumes
+
+version: '3.9'
+
+services:
+
+  # ── ML / Python backend ─────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pa_backend
+    restart: unless-stopped
+    ports:
+      - '8000:8000'
+    environment:
+      - ENV=development
+      - DATABASE_URL=postgresql://pa_user:pa_pass@db:5432/pa_db
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./backend/models:/app/models
+    networks:
+      - pa_net
+
+  # ── React frontend ──────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend-react
+      dockerfile: Dockerfile
+    container_name: pa_frontend
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend-react:/app
+      - /app/node_modules
+    networks:
+      - pa_net
+
+  # ── PostgreSQL ──────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: pa_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pa_db
+      POSTGRES_USER: pa_user
+      POSTGRES_PASSWORD: pa_pass
+    ports:
+      - '5432:5432'
+    volumes:
+      - pa_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U pa_user -d pa_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pa_net
+
+  # ── MLflow experiment tracking ──────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.11.0
+    container_name: pa_mlflow
+    restart: unless-stopped
+    ports:
+      - '5001:5000'
+    command: mlflow server --host 0.0.0.0 --backend-store-uri sqlite:///mlflow.db --default-artifact-root /mlartifacts
+    volumes:
+      - pa_mlflow_data:/mlartifacts
+    networks:
+      - pa_net
+
+volumes:
+  pa_db_data:
+  pa_mlflow_data:
+
+networks:
+  pa_net:
+    driver: bridge
